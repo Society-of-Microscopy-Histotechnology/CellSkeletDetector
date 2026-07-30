@@ -14,6 +14,7 @@ from PIL import Image, ImageDraw, ImageFont
 from scipy import ndimage as ndi
 
 from .core import CONNECTIVITY_8, normalize01
+from .i18n import column_labels, metric_labels, translate
 from .models import AnalysisResult
 
 
@@ -31,35 +32,6 @@ CENTER_COLORS = (
     "#ffffff",
     "#00a2ff",
 )
-
-METRIC_LABELS = {
-    "mask_area_px": "Площадь маски, px",
-    "mask_area_um2": "Площадь маски, мкм²",
-    "skeleton_length_px": "Длина скелета, px",
-    "skeleton_length_um": "Длина скелета, мкм",
-    "endpoints": "Концевые точки",
-    "junctions": "Узлы ветвления",
-    "branches": "Ветви",
-    "objects": "Объекты",
-    "mean_branch_length_um": "Средняя длина ветви, мкм",
-    "median_branch_length_um": "Медианная длина ветви, мкм",
-    "mean_tortuosity": "Средняя извилистость",
-    "mean_diameter_px": "Средний диаметр, px",
-    "mean_diameter_um": "Средний диаметр, мкм",
-    "mean_intensity_on_mask": "Средняя интенсивность маски",
-    "total_intensity_on_mask": "Суммарная интенсивность маски",
-    "network_density_length_per_area": "Плотность сети",
-    "threshold_value": "Базовый порог",
-    "threshold_method": "Метод порога",
-    "enhancement_method": "Усиление сигнала",
-    "skeleton_method": "Скелетизация",
-    "pixel_size_um": "Размер пикселя, мкм/px",
-    "sholl_centers": "Центры Sholl",
-    "sholl_max_intersections_mean": "Средний максимум пересечений Sholl",
-    "sholl_auc_mean": "Средняя площадь под кривой Sholl",
-    "sholl_total_intersections_mean": "Средняя сумма пересечений Sholl",
-}
-
 
 def to_uint8(array: np.ndarray) -> np.ndarray:
     source = np.asarray(array)
@@ -100,7 +72,9 @@ def _component_centroids(mask: np.ndarray) -> list[tuple[float, float]]:
     return [(float(x), float(y)) for y, x in centers]
 
 
-def render_overlay(result: AnalysisResult) -> Image.Image:
+def render_overlay(
+    result: AnalysisResult, language: str = "ru"
+) -> Image.Image:
     """Render the notebook's Neurolucida-like output without Matplotlib."""
 
     skeleton = result.skeleton
@@ -237,7 +211,7 @@ def render_overlay(result: AnalysisResult) -> Image.Image:
         draw.line((x0, y, x1, y), fill="white", width=line_width)
         draw.text(
             ((x0 + x1) / 2, y - line_width - 2),
-            f"{shown_um:g} мкм",
+            f"{shown_um:g} {translate('мкм', language)}",
             fill="white",
             font=_font(max(10, min(height, width) // 50)),
             anchor="ms",
@@ -267,12 +241,19 @@ def _format_value(value: Any) -> str:
     return str(value)
 
 
-def _html_table(rows: Iterable[dict[str, Any]]) -> str:
+def _html_table(
+    rows: Iterable[dict[str, Any]],
+    language: str,
+    labels: dict[str, str] | None = None,
+) -> str:
     materialized = list(rows)
     if not materialized:
-        return "<p>Нет данных.</p>"
+        return f"<p>{translate('Нет данных.', language)}</p>"
     columns = list(materialized[0])
-    head = "".join(f"<th>{html.escape(str(column))}</th>" for column in columns)
+    head = "".join(
+        f"<th>{html.escape(str((labels or {}).get(column, column)))}</th>"
+        for column in columns
+    )
     body = []
     for row in materialized:
         cells = "".join(
@@ -283,11 +264,15 @@ def _html_table(rows: Iterable[dict[str, Any]]) -> str:
     return f"<table><thead><tr>{head}</tr></thead><tbody>{''.join(body)}</tbody></table>"
 
 
-def _write_report(result: AnalysisResult, path: Path) -> None:
+def _write_report(
+    result: AnalysisResult, path: Path, language: str
+) -> None:
+    labels = metric_labels(language)
+    columns = column_labels(language)
     metric_rows = [
         {
-            "Показатель": METRIC_LABELS.get(key, key),
-            "Значение": _format_value(value),
+            translate("Показатель", language): labels.get(key, key),
+            translate("Значение", language): _format_value(value),
         }
         for key, value in result.metrics.items()
     ]
@@ -295,7 +280,7 @@ def _write_report(result: AnalysisResult, path: Path) -> None:
 <html lang="ru">
 <head>
 <meta charset="utf-8">
-<title>Cell Skeleton Detector — отчёт</title>
+<title>Cell Skeleton Detector — {translate("отчёт", language)}</title>
 <style>
 body {{ font: 15px/1.45 "Segoe UI", sans-serif; margin: 32px; color: #17212b; }}
 h1, h2 {{ color: #123047; }}
@@ -309,19 +294,19 @@ th {{ background: #e9f1f5; position: sticky; top: 0; }}
 </head>
 <body>
 <h1>Cell Skeleton Detector</h1>
-<p class="note">Исследовательский отчёт. Результаты требуют проверки на контрольной выборке и не предназначены для клинической диагностики.</p>
+<p class="note">{translate("Исследовательский отчёт. Результаты требуют проверки на контрольной выборке и не предназначены для клинической диагностики.", language)}</p>
 <div class="images">
-  <figure><img src="enhanced_signal.png"><figcaption>Усиленный сигнал</figcaption></figure>
-  <figure><img src="binary_mask.png"><figcaption>Бинарная маска</figcaption></figure>
-  <figure><img src="skeleton.png"><figcaption>Скелет</figcaption></figure>
+  <figure><img src="enhanced_signal.png"><figcaption>{translate("Усиленный сигнал", language)}</figcaption></figure>
+  <figure><img src="binary_mask.png"><figcaption>{translate("Бинарная маска", language)}</figcaption></figure>
+  <figure><img src="skeleton.png"><figcaption>{translate("Скелет", language)}</figcaption></figure>
   <figure><img src="neurolucida_overlay.png"><figcaption>Neurolucida-like + Sholl</figcaption></figure>
 </div>
-<h2>Основные метрики</h2>
-{_html_table(metric_rows)}
+<h2>{translate("Основные метрики", language)}</h2>
+{_html_table(metric_rows, language)}
 <h2>Sholl summary</h2>
-{_html_table(result.sholl_summary)}
-<h2>Параметры</h2>
-{_html_table([result.params.to_dict()])}
+{_html_table(result.sholl_summary, language, columns)}
+<h2>{translate("Параметры", language)}</h2>
+{_html_table([result.params.to_dict()], language)}
 </body>
 </html>
 """
@@ -346,6 +331,7 @@ def export_results(
     result: AnalysisResult,
     parent_directory: str | Path,
     source_stem: str,
+    language: str = "ru",
 ) -> tuple[Path, Path]:
     parent = Path(parent_directory)
     parent.mkdir(parents=True, exist_ok=True)
@@ -355,7 +341,7 @@ def export_results(
     image_to_pil(result.enhanced).save(target / "enhanced_signal.png")
     mask_to_pil(result.binary).save(target / "binary_mask.png")
     mask_to_pil(result.skeleton).save(target / "skeleton.png")
-    render_overlay(result).save(target / "neurolucida_overlay.png")
+    render_overlay(result, language).save(target / "neurolucida_overlay.png")
 
     _write_csv(target / "metrics.csv", [result.metrics])
     _write_csv(target / "branch_table.csv", result.branches)
@@ -366,7 +352,7 @@ def export_results(
         json.dumps(result.params.to_dict(), ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
-    _write_report(result, target / "report.html")
+    _write_report(result, target / "report.html", language)
 
     archive = target.with_suffix(".zip")
     with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as bundle:

@@ -8,6 +8,7 @@ import numpy as np
 
 from cell_skeleton_detector.core import AnalysisEngine
 from cell_skeleton_detector.exporters import export_results, render_overlay
+from cell_skeleton_detector.i18n import translate
 from cell_skeleton_detector.models import AnalysisParams
 
 
@@ -46,6 +47,16 @@ class AnalysisEngineTests(unittest.TestCase):
             binary, np.array([[False, False], [True, True]])
         )
         self.assertEqual(threshold, 0.5)
+
+    def test_english_translation_formats_progress(self) -> None:
+        self.assertEqual(
+            translate("Оценка устойчивости: 3/20", "en"),
+            "Estimating robustness: 3/20",
+        )
+        self.assertEqual(
+            translate("Сохранено: {name}", "en", name="sample"),
+            "Saved: sample",
+        )
 
     def test_junction_cluster_is_counted_as_one_node(self) -> None:
         params = AnalysisParams(bootstrap_n=0)
@@ -90,6 +101,16 @@ class AnalysisEngineTests(unittest.TestCase):
             self.assertTrue((folder / "metrics.csv").is_file())
             self.assertTrue((folder / "neurolucida_overlay.png").is_file())
             self.assertTrue(archive.is_file())
+
+            english_folder, _ = export_results(
+                result, directory, "synthetic_en", language="en"
+            )
+            report = (english_folder / "report.html").read_text(
+                encoding="utf-8"
+            )
+            self.assertIn("Research report.", report)
+            self.assertIn("Primary Metrics", report)
+            self.assertNotIn("Исследовательский отчёт", report)
 
 
 if __name__ == "__main__":

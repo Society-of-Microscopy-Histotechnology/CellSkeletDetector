@@ -13,11 +13,16 @@ from tkinter import filedialog, messagebox, ttk
 
 from .core import AnalysisEngine, load_image
 from .exporters import (
-    METRIC_LABELS,
     export_results,
     image_to_pil,
     mask_to_pil,
     render_overlay,
+)
+from .i18n import (
+    LANGUAGE_NAMES,
+    column_labels,
+    metric_labels,
+    translate,
 )
 from .models import AnalysisParams, AnalysisResult
 
@@ -91,6 +96,11 @@ class ImagePane(ttk.Frame):
         self.source = image.copy() if image is not None else None
         self._render()
 
+    def set_empty_text(self, text: str) -> None:
+        self.empty_text = text
+        if self.source is None:
+            self._render()
+
     def _render(self, _event: tk.Event | None = None) -> None:
         self.canvas.delete("all")
         width = max(self.canvas.winfo_width(), 2)
@@ -145,6 +155,7 @@ class DataTable(ttk.Frame):
         *,
         labels: dict[str, str] | None = None,
         transpose: bool = False,
+        no_data_text: str = "Нет данных",
     ) -> None:
         self.tree.delete(*self.tree.get_children())
         if transpose and rows:
@@ -161,20 +172,14 @@ class DataTable(ttk.Frame):
         if not materialized:
             columns = ("message",)
             self.tree.configure(columns=columns)
-            self.tree.heading("message", text="Нет данных")
+            self.tree.heading("message", text=no_data_text)
             self.tree.column("message", width=500, stretch=True)
             return
 
         columns = tuple(materialized[0].keys())
         self.tree.configure(columns=columns)
         for column in columns:
-            title = (
-                "Показатель"
-                if column == "metric" and transpose
-                else "Значение"
-                if column == "value" and transpose
-                else column
-            )
+            title = (labels or {}).get(column, column)
             self.tree.heading(column, text=title)
             width = 260 if column == "metric" else 135
             self.tree.column(column, width=width, minwidth=80, stretch=True)
@@ -242,9 +247,17 @@ class DetectorApp:
         self.image: np.ndarray | None = None
         self.result: AnalysisResult | None = None
         self.events: queue.Queue[tuple[Any, ...]] = queue.Queue()
+        self.language_code = "en"
+        self.language_variable = tk.StringVar(value="English")
         self.variables: dict[str, tk.Variable] = {}
         self.combo_maps: dict[str, dict[str, str]] = {}
         self.combo_reverse: dict[str, dict[str, str]] = {}
+        self.combo_widgets: dict[str, ttk.Combobox] = {}
+        self.localized_widgets: list[tuple[tk.Widget, str]] = []
+        self.localized_tabs: list[tuple[ttk.Notebook, tk.Widget, str]] = []
+        self.pane_empty_sources: dict[str, str] = {}
+        self.status_source = "Готово"
+        self.status_values: dict[str, Any] = {}
         self.busy = False
 
         self._build_header()
@@ -252,6 +265,80 @@ class DetectorApp:
         self._build_status()
         self._set_defaults()
         self.root.after(100, self._poll_events)
+
+    def _t(self, source: str, **values: Any) -> str:
+        return translate(source, self.language_code, **values)
+
+    def _localized(
+        self, widget: tk.Widget, source: str
+    ) -> tk.Widget:
+        self.localized_widgets.append((widget, source))
+        widget.configure(text=self._t(source))
+        return widget
+
+    def _localized_tab(
+        self,
+        notebook: ttk.Notebook,
+        child: tk.Widget,
+        source: str,
+    ) -> None:
+        notebook.add(child, text=self._t(source))
+        self.localized_tabs.append((notebook, child, source))
+
+    def _set_status(self, source: str, **values: Any) -> None:
+        self.status_source = source
+        self.status_values = values
+        self.status.configure(text=self._t(source, **values))
+
+    def _on_language_changed(self, _event: tk.Event | None = None) -> None:
+        new_language = LANGUAGE_NAMES.get(
+            self.language_variable.get(), "ru"
+        )
+        if new_language == self.language_code:
+            return
+
+        current_combo_values = {
+            name: self.combo_maps[name].get(
+                str(variable.get()), getattr(AnalysisParams(), name)
+            )
+            for name, variable in self.variables.items()
+            if name in self.combo_maps
+        }
+        self.language_code = new_language
+
+        for widget, source in self.localized_widgets:
+            widget.configure(text=self._t(source))
+        for notebook, child, source in self.localized_tabs:
+            notebook.tab(child, text=self._t(source))
+
+        for name, widget in self.combo_widgets.items():
+            choices = [
+                (self._t(display), value)
+                for display, value in self.COMBOS[name]
+            ]
+            self.combo_maps[name] = dict(choices)
+            self.combo_reverse[name] = {
+                value: display for display, value in choices
+            }
+            widget.configure(values=[display for display, _ in choices])
+            internal_value = current_combo_values[name]
+            self.variables[name].set(
+                self.combo_reverse[name][internal_value]
+            )
+
+        for key, pane in self.image_panes.items():
+            pane.set_empty_text(self._t(self.pane_empty_sources[key]))
+
+        if self.image_path is None:
+            self.file_label.configure(
+                text=self._t("Откройте изображение астроцитов")
+            )
+        self._set_status(self.status_source, **self.status_values)
+        self._refresh_tables()
+        if self.result is not None:
+            self.image_panes["overlay"].set_image(
+                render_overlay(self.result, self.language_code)
+            )
 
     def _configure_style(self) -> None:
         style = ttk.Style(self.root)
@@ -364,30 +451,43 @@ class DetectorApp:
         ).pack(anchor="w")
         self.file_label = ttk.Label(
             title_area,
-            text="Откройте изображение астроцитов",
+            text=self._t("Откройте изображение астроцитов"),
             style="Subtitle.TLabel",
         )
         self.file_label.pack(anchor="w", pady=(2, 0))
 
         self.open_button = ttk.Button(
-            header, text="Открыть изображение", command=self.open_image
+            header, command=self.open_image
         )
+        self._localized(self.open_button, "Открыть изображение")
         self.open_button.pack(side="left", padx=5)
         self.run_button = ttk.Button(
             header,
-            text="Обработать",
             style="Accent.TButton",
             command=self.start_analysis,
         )
+        self._localized(self.run_button, "Обработать")
         self.run_button.pack(side="left", padx=5)
         self.save_button = ttk.Button(
             header,
-            text="Сохранить результаты",
             style="Success.TButton",
             command=self.start_export,
             state="disabled",
         )
+        self._localized(self.save_button, "Сохранить результаты")
         self.save_button.pack(side="left", padx=(5, 0))
+
+        language_selector = ttk.Combobox(
+            header,
+            state="readonly",
+            values=list(LANGUAGE_NAMES),
+            textvariable=self.language_variable,
+            width=9,
+        )
+        language_selector.bind(
+            "<<ComboboxSelected>>", self._on_language_changed
+        )
+        language_selector.pack(side="left", padx=(10, 0))
 
     def _build_main(self) -> None:
         paned = ttk.Panedwindow(self.root, orient="horizontal")
@@ -401,21 +501,24 @@ class DetectorApp:
             settings_container, style="Panel.TFrame"
         )
         settings_header.pack(fill="x", padx=10, pady=(9, 5))
-        ttk.Label(
+        settings_title = ttk.Label(
             settings_header,
-            text="Параметры",
             font=("Segoe UI Semibold", 12),
-        ).pack(side="left")
-        ttk.Button(
-            settings_header, text="Сбросить", command=self._set_defaults
-        ).pack(side="right")
+        )
+        self._localized(settings_title, "Параметры")
+        settings_title.pack(side="left")
+        reset_button = ttk.Button(
+            settings_header, command=self._set_defaults
+        )
+        self._localized(reset_button, "Сбросить")
+        reset_button.pack(side="right")
 
         settings_tabs = ttk.Notebook(settings_container)
         settings_tabs.pack(fill="both", expand=True)
         basic = ScrollFrame(settings_tabs)
         advanced = ScrollFrame(settings_tabs)
-        settings_tabs.add(basic, text="Основные")
-        settings_tabs.add(advanced, text="Дополнительно")
+        self._localized_tab(settings_tabs, basic, "Основные")
+        self._localized_tab(settings_tabs, advanced, "Дополнительно")
         self._build_basic_settings(basic.body)
         self._build_advanced_settings(advanced.body)
 
@@ -431,14 +534,18 @@ class DetectorApp:
             ("skeleton", "Скелет"),
             ("overlay", "Sholl / Overlay"),
         ):
-            pane = ImagePane(
-                preview_tabs,
+            empty_source = (
                 "Результат появится после обработки"
                 if key != "original"
-                else "Откройте изображение",
+                else "Откройте изображение"
             )
-            preview_tabs.add(pane, text=label)
+            pane = ImagePane(
+                preview_tabs,
+                self._t(empty_source),
+            )
+            self._localized_tab(preview_tabs, pane, label)
             self.image_panes[key] = pane
+            self.pane_empty_sources[key] = empty_source
 
         result_tabs = ttk.Notebook(content)
         result_tabs.pack(fill="x", pady=(8, 0))
@@ -447,14 +554,15 @@ class DetectorApp:
         self.sholl_table = DataTable(result_tabs)
         self.branches_table = DataTable(result_tabs)
         self.uncertainty_table = DataTable(result_tabs)
-        result_tabs.add(self.metrics_table, text="Метрики")
-        result_tabs.add(self.sholl_table, text="Sholl summary")
-        result_tabs.add(self.branches_table, text="Ветви")
-        result_tabs.add(self.uncertainty_table, text="Bootstrap")
-        self.metrics_table.set_rows([])
-        self.sholl_table.set_rows([])
-        self.branches_table.set_rows([])
-        self.uncertainty_table.set_rows([])
+        self._localized_tab(result_tabs, self.metrics_table, "Метрики")
+        self._localized_tab(
+            result_tabs, self.sholl_table, "Sholl summary"
+        )
+        self._localized_tab(result_tabs, self.branches_table, "Ветви")
+        self._localized_tab(
+            result_tabs, self.uncertainty_table, "Bootstrap"
+        )
+        self._refresh_tables()
 
     def _build_status(self) -> None:
         bar = ttk.Frame(self.root)
@@ -464,12 +572,13 @@ class DetectorApp:
         )
         self.progress.pack(side="right", fill="x", expand=True, padx=(16, 0))
         self.status = ttk.Label(
-            bar, text="Готово", style="Subtitle.TLabel"
+            bar, text=self._t("Готово"), style="Subtitle.TLabel"
         )
         self.status.pack(side="left")
 
     def _group(self, parent: tk.Misc, title: str) -> ttk.LabelFrame:
-        frame = ttk.LabelFrame(parent, text=title)
+        frame = ttk.LabelFrame(parent, text=self._t(title))
+        self.localized_widgets.append((frame, title))
         frame.pack(fill="x", padx=10, pady=7)
         frame.columnconfigure(1, weight=1)
         return frame
@@ -481,7 +590,10 @@ class DetectorApp:
         name: str,
         label: str,
     ) -> ttk.Combobox:
-        choices = self.COMBOS[name]
+        choices = [
+            (self._t(display), value)
+            for display, value in self.COMBOS[name]
+        ]
         display_values = [display for display, _ in choices]
         self.combo_maps[name] = dict(choices)
         self.combo_reverse[name] = {
@@ -489,7 +601,9 @@ class DetectorApp:
         }
         variable = tk.StringVar()
         self.variables[name] = variable
-        ttk.Label(parent, text=label).grid(
+        label_widget = ttk.Label(parent, text=self._t(label))
+        self.localized_widgets.append((label_widget, label))
+        label_widget.grid(
             row=row, column=0, sticky="w", padx=8, pady=5
         )
         widget = ttk.Combobox(
@@ -500,6 +614,7 @@ class DetectorApp:
             width=22,
         )
         widget.grid(row=row, column=1, sticky="ew", padx=8, pady=5)
+        self.combo_widgets[name] = widget
         return widget
 
     def _add_number(
@@ -515,7 +630,9 @@ class DetectorApp:
     ) -> ttk.Spinbox:
         variable = tk.StringVar()
         self.variables[name] = variable
-        ttk.Label(parent, text=label).grid(
+        label_widget = ttk.Label(parent, text=self._t(label))
+        self.localized_widgets.append((label_widget, label))
+        label_widget.grid(
             row=row, column=0, sticky="w", padx=8, pady=5
         )
         widget = ttk.Spinbox(
@@ -538,9 +655,8 @@ class DetectorApp:
     ) -> ttk.Checkbutton:
         variable = tk.BooleanVar()
         self.variables[name] = variable
-        widget = ttk.Checkbutton(
-            parent, text=label, variable=variable
-        )
+        widget = ttk.Checkbutton(parent, variable=variable)
+        self._localized(widget, label)
         widget.grid(
             row=row,
             column=0,
@@ -633,12 +749,14 @@ class DetectorApp:
 
         hint = ttk.Label(
             parent,
-            text=(
-                "Совет: если тонкие отростки теряются, уменьшите "
-                "множитель порога. Если захватывается фон — увеличьте его."
-            ),
+            text="",
             wraplength=300,
             foreground=MUTED,
+        )
+        self._localized(
+            hint,
+            "Совет: если тонкие отростки теряются, уменьшите "
+            "множитель порога. Если захватывается фон — увеличьте его.",
         )
         hint.pack(fill="x", padx=16, pady=10)
 
@@ -769,7 +887,7 @@ class DetectorApp:
             if name in self.combo_reverse:
                 value = self.combo_reverse[name][value]
             variable.set(value)
-        self.status.configure(text="Параметры сброшены")
+        self._set_status("Параметры сброшены")
 
     def _combo_value(self, name: str) -> str:
         display = str(self.variables[name].get())
@@ -780,7 +898,13 @@ class DetectorApp:
         try:
             return float(raw)
         except ValueError as error:
-            raise ValueError(f"Проверьте поле «{name}»: {raw}") from error
+            raise ValueError(
+                self._t(
+                    "Проверьте поле «{name}»: {value}",
+                    name=name,
+                    value=raw,
+                )
+            ) from error
 
     def _int(self, name: str) -> int:
         return int(round(self._float(name)))
@@ -834,10 +958,13 @@ class DetectorApp:
 
     def open_image(self) -> None:
         path = filedialog.askopenfilename(
-            title="Выберите изображение",
+            title=self._t("Выберите изображение"),
             filetypes=(
-                ("Изображения", "*.png *.jpg *.jpeg *.tif *.tiff *.bmp"),
-                ("Все файлы", "*.*"),
+                (
+                    self._t("Изображения"),
+                    "*.png *.jpg *.jpeg *.tif *.tiff *.bmp",
+                ),
+                (self._t("Все файлы"), "*.*"),
             ),
         )
         if not path:
@@ -846,7 +973,9 @@ class DetectorApp:
             image = load_image(path)
         except Exception as error:
             messagebox.showerror(
-                "Не удалось открыть изображение", str(error), parent=self.root
+                self._t("Не удалось открыть изображение"),
+                self._t(str(error)),
+                parent=self.root,
             )
             return
         self.image_path = Path(path)
@@ -859,7 +988,7 @@ class DetectorApp:
         for key in ("enhanced", "binary", "skeleton", "overlay"):
             self.image_panes[key].set_image(None)
         self.save_button.configure(state="disabled")
-        self.status.configure(text="Изображение загружено")
+        self._set_status("Изображение загружено")
         self.progress.configure(value=0)
 
     def start_analysis(self) -> None:
@@ -867,8 +996,8 @@ class DetectorApp:
             return
         if self.image is None:
             messagebox.showinfo(
-                "Нет изображения",
-                "Сначала откройте изображение.",
+                self._t("Нет изображения"),
+                self._t("Сначала откройте изображение."),
                 parent=self.root,
             )
             return
@@ -876,14 +1005,16 @@ class DetectorApp:
             params = self.collect_params()
         except Exception as error:
             messagebox.showerror(
-                "Ошибка параметров", str(error), parent=self.root
+                self._t("Ошибка параметров"),
+                self._t(str(error)),
+                parent=self.root,
             )
             return
 
         self._set_busy(True)
         self.save_button.configure(state="disabled")
         self.progress.configure(value=1)
-        self.status.configure(text="Запуск обработки…")
+        self._set_status("Запуск обработки…")
         image = self.image.copy()
 
         def worker() -> None:
@@ -899,11 +1030,13 @@ class DetectorApp:
                     "enhanced": image_to_pil(result.enhanced),
                     "binary": mask_to_pil(result.binary),
                     "skeleton": mask_to_pil(result.skeleton),
-                    "overlay": render_overlay(result),
+                    "overlay": render_overlay(
+                        result, self.language_code
+                    ),
                 }
                 self.events.put(("analysis_done", result, previews))
-            except Exception:
-                self.events.put(("error", traceback.format_exc()))
+            except Exception as error:
+                self.events.put(("error", error, traceback.format_exc()))
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -911,21 +1044,24 @@ class DetectorApp:
         if self.busy or self.result is None or self.image_path is None:
             return
         destination = filedialog.askdirectory(
-            title="Куда сохранить результаты?"
+            title=self._t("Куда сохранить результаты?")
         )
         if not destination:
             return
         self._set_busy(True)
-        self.status.configure(text="Сохранение результатов…")
+        self._set_status("Сохранение результатов…")
         result = self.result
         stem = self.image_path.stem
+        language = self.language_code
 
         def worker() -> None:
             try:
-                folder, archive = export_results(result, destination, stem)
+                folder, archive = export_results(
+                    result, destination, stem, language
+                )
                 self.events.put(("export_done", folder, archive))
-            except Exception:
-                self.events.put(("error", traceback.format_exc()))
+            except Exception as error:
+                self.events.put(("error", error, traceback.format_exc()))
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -935,32 +1071,87 @@ class DetectorApp:
                 event = self.events.get_nowait()
                 kind = event[0]
                 if kind == "progress":
-                    self.status.configure(text=event[1])
+                    self._set_status(event[1])
                     self.progress.configure(value=float(event[2]) * 100)
                 elif kind == "analysis_done":
                     self._show_result(event[1], event[2])
                 elif kind == "export_done":
                     self._set_busy(False)
                     folder, archive = event[1], event[2]
-                    self.status.configure(text=f"Сохранено: {folder.name}")
+                    self._set_status("Сохранено: {name}", name=folder.name)
                     messagebox.showinfo(
-                        "Результаты сохранены",
-                        f"Папка:\n{folder}\n\nАрхив:\n{archive}",
+                        self._t("Результаты сохранены"),
+                        self._t(
+                            "Папка:\n{folder}\n\nАрхив:\n{archive}",
+                            folder=folder,
+                            archive=archive,
+                        ),
                         parent=self.root,
                     )
                 elif kind == "error":
                     self._set_busy(False)
-                    self.status.configure(text="Ошибка")
-                    details = event[1]
+                    self._set_status("Ошибка")
+                    error = event[1]
+                    details = event[2]
                     messagebox.showerror(
-                        "Ошибка обработки",
-                        details.splitlines()[-1] if details else "Неизвестная ошибка",
+                        self._t("Ошибка обработки"),
+                        self._t(str(error))
+                        if error
+                        else self._t("Неизвестная ошибка"),
                         detail=details,
                         parent=self.root,
                     )
         except queue.Empty:
             pass
         self.root.after(100, self._poll_events)
+
+    def _refresh_tables(self) -> None:
+        no_data = self._t("Нет данных")
+        columns = column_labels(self.language_code)
+        if self.result is None:
+            for table in (
+                self.metrics_table,
+                self.sholl_table,
+                self.branches_table,
+                self.uncertainty_table,
+            ):
+                table.set_rows([], no_data_text=no_data)
+            return
+
+        metrics = metric_labels(self.language_code)
+        metric_table_labels = {
+            **metrics,
+            "metric": self._t("Показатель"),
+            "value": self._t("Значение"),
+        }
+        uncertainty_rows = [
+            {
+                **row,
+                "metric": metrics.get(row.get("metric"), row.get("metric")),
+            }
+            for row in self.result.uncertainty
+        ]
+        self.metrics_table.set_rows(
+            [self.result.metrics],
+            labels=metric_table_labels,
+            transpose=True,
+            no_data_text=no_data,
+        )
+        self.sholl_table.set_rows(
+            self.result.sholl_summary,
+            labels=columns,
+            no_data_text=no_data,
+        )
+        self.branches_table.set_rows(
+            self.result.branches,
+            labels=columns,
+            no_data_text=no_data,
+        )
+        self.uncertainty_table.set_rows(
+            uncertainty_rows,
+            labels=columns,
+            no_data_text=no_data,
+        )
 
     def _show_result(
         self,
@@ -970,16 +1161,11 @@ class DetectorApp:
         self.result = result
         for name, preview in previews.items():
             self.image_panes[name].set_image(preview)
-        self.metrics_table.set_rows(
-            [result.metrics], labels=METRIC_LABELS, transpose=True
-        )
-        self.sholl_table.set_rows(result.sholl_summary)
-        self.branches_table.set_rows(result.branches)
-        self.uncertainty_table.set_rows(result.uncertainty)
+        self._refresh_tables()
         self._set_busy(False)
         self.save_button.configure(state="normal")
         self.progress.configure(value=100)
-        self.status.configure(text="Обработка завершена")
+        self._set_status("Обработка завершена")
 
     def _set_busy(self, busy: bool) -> None:
         self.busy = busy
