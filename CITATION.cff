@@ -1,0 +1,18 @@
+cff-version: 1.2.0
+message: "If you use PoKi in scientific work, please cite it using this metadata."
+type: software
+
+title: "CellSkeletDetector"
+version: "0.0.1"
+date-released: "2026-07-30"
+
+authors:
+  - family-names: "Kuzmin"
+    given-names: "Egor A."
+    orcid: "https://orcid.org/0000-0003-4098-1125"
+
+  - family-names: "Pokidova"
+    given-names: "Ksenia S."
+    orcid: "https://orcid.org/0009-0000-0323-7669"
+
+url: "https://github.com/Society-of-Microscopy-Histotechnology/CellSkeletDetector"
