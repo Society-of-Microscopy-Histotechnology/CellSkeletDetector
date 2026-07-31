@@ -1,11 +1,11 @@
-# Cell Skeleton Detector
+# CellSkeletDetector
 
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.21709108.svg)](https://doi.org/10.5281/zenodo.21709108)
 ## Citation
 
 If you use PoKi in scientific work, please cite:
 
-> Kuzmin, E. A., Pokidova, K. S. (2026). *Cell Skeleton Detector* (Version 0.0.1) [Computer software]. Zenodo. https://doi.org/10.5281/zenodo.21709108
+> Kuzmin, E. A., Pokidova, K. S. (2026). *CellSkeletDetector* (Version 0.0.1) [Computer software]. Zenodo. https://doi.org/10.5281/zenodo.21709108
 
 
 ## Quick Start from the Terminal
